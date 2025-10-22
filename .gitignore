@@ -1,0 +1,13 @@
+# --- Security ---
+# Ignore environment variables files, which contain secret keys
+.env
+*.env
+
+# --- Python ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+.vscode/
+
