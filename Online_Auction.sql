@@ -34,7 +34,7 @@ constraint fk_cust_key foreign key (customerId) references customer(userId) on d
 );
 
 create table bid(
-bidID varchar(20) primary key,
+bidID varchar(36) primary key,
 amount int not null,
 bid_time timestamp not null default current_timestamp,
 custID varchar(10),
@@ -108,3 +108,220 @@ INSERT INTO payment VALUES
 ('T003',3500,'Net Banking','2025-09-07','C004'), 
 ('T004',5500,'UPI','2025-09-08','C005'),
 ('T005',2500,'Credit/Debit Card','2025-09-08','C001');
+
+-- TRIGGER: before_bid_insert
+-- Purpose: Validates all new bids before they are inserted.
+-- Checks: 1. Auction is 'Active'. 2. NOW() is within auction time. 3. Bid is high enough.
+--
+DELIMITER $$
+CREATE TRIGGER before_bid_insert
+BEFORE INSERT ON bid
+FOR EACH ROW
+BEGIN
+    DECLARE v_auction_status ENUM('Scheduled','Active','Ended','Completed','Cancelled');
+    DECLARE v_auction_start DATETIME;
+    DECLARE v_auction_end DATETIME;
+    DECLARE v_start_price INT;
+    DECLARE v_current_max_bid INT;
+
+    -- 1. Get the auction status, times, and item start price
+    SELECT a.status, a.start_time, a.end_time, ai.start_price
+    INTO v_auction_status, v_auction_start, v_auction_end, v_start_price
+    FROM auction a
+    JOIN auction_item ai ON a.auctionID = ai.auctionID
+    WHERE ai.itemID = NEW.itemID;
+
+    -- 2. Check if the auction is active and within the time window
+    IF v_auction_status != 'Active' OR NOW() NOT BETWEEN v_auction_start AND v_auction_end THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Bidding is not allowed. The auction is not active or is outside the bidding window.';
+    END IF;
+
+    -- 3. Get the current highest bid for this item
+    SELECT MAX(amount) INTO v_current_max_bid FROM bid WHERE itemID = NEW.itemID;
+
+    -- 4. Check if the new bid is high enough
+    IF NEW.amount <= IFNULL(v_current_max_bid, v_start_price) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Your bid is too low. It must be higher than the current highest bid or the start price.';
+    END IF;
+END$$
+DELIMITTER ;
+
+-- PROCEDURE: sp_place_bid
+-- Purpose: Simplifies the process of placing a bid. Uses UUID() for a unique bidID.
+--
+DELIMITER $$
+CREATE PROCEDURE sp_place_bid(
+    IN p_custID VARCHAR(10),
+    IN p_itemID VARCHAR(10),
+    IN p_amount INT
+)
+BEGIN
+    -- The 'before_bid_insert' trigger will fire automatically to validate this insert.
+    INSERT INTO bid (bidID, custID, itemID, amount, bid_time)
+    VALUES (UUID(), p_custID, p_itemID, p_amount, NOW());
+    
+    SELECT 'Bid placed successfully.' AS message;
+END$$
+DELIMITER ;
+CALL sp_place_bid('C005', 'I001', 4300); -- This will work
+CALL sp_place_bid('C001', 'I001', 40000); -- This will fail (bid too low)
+
+
+--
+-- PROCEDURE: sp_finalize_auction_item
+-- Purpose: Checks winning bid against reserve price and updates item status to 'Sold'.
+-- Run this after an auction status has been manually set to 'Ended'.
+--
+DELIMITER $$
+CREATE PROCEDURE sp_finalize_auction_item(
+    IN p_itemID VARCHAR(10)
+)
+BEGIN
+    DECLARE v_winning_bid INT;
+    DECLARE v_winning_custID VARCHAR(10);
+    DECLARE v_reserve_price INT;
+    DECLARE v_auction_status ENUM('Scheduled','Active','Ended','Completed','Cancelled');
+
+    -- Get the auction status to make sure it's actually over
+    SELECT a.status, ai.reserve_price
+    INTO v_auction_status, v_reserve_price
+    FROM auction_item ai
+    JOIN auction a ON ai.auctionID = a.auctionID
+    WHERE ai.itemID = p_itemID;
+
+    -- Only proceed if the auction has 'Ended'
+    IF v_auction_status = 'Ended' THEN
+        -- Find the highest bid and the bidder
+        SELECT amount, custID
+        INTO v_winning_bid, v_winning_custID
+        FROM bid
+        WHERE itemID = p_itemID
+        ORDER BY amount DESC
+        LIMIT 1;
+
+        -- Check if any bids were placed
+        IF v_winning_bid IS NOT NULL THEN
+            -- Check if the highest bid met the reserve price
+            IF v_winning_bid >= v_reserve_price THEN
+                UPDATE auction_item
+                SET status = 'Sold'
+                WHERE itemID = p_itemID;
+                
+                SELECT CONCAT('Item ', p_itemID, ' sold to ', v_winning_custID, ' for ', v_winning_bid) AS Result;
+            ELSE
+                SELECT CONCAT('Item ', p_itemID, ' not sold. Reserve price of ', v_reserve_price, ' not met.') AS Result;
+            END IF;
+        ELSE
+            SELECT CONCAT('Item ', p_itemID, ' not sold. No bids received.') AS Result;
+        END IF;
+    ELSE
+        SELECT CONCAT('Cannot finalize item. Auction status is: ', v_auction_status) AS Result;
+    END IF;
+END$$
+DELIMITTER ;
+UPDATE auction SET status = 'Ended' WHERE auctionID = 'A001';
+CALL sp_finalize_auction_item('I001');
+--
+-- FUNCTION: get_current_price
+-- Purpose: Returns the current highest bid for an item, or its start price if no bids exist.
+--
+DELIMITER $$
+CREATE FUNCTION get_current_price(
+    p_itemID VARCHAR(10)
+)
+RETURNS INT
+READS SQL DATA
+BEGIN
+    DECLARE v_max_bid INT;
+    DECLARE v_start_price INT;
+
+    -- Get the highest bid
+    SELECT MAX(amount) INTO v_max_bid FROM bid WHERE itemID = p_itemID;
+
+    -- If no bids, get the start price
+    IF v_max_bid IS NULL THEN
+        SELECT start_price INTO v_start_price FROM auction_item WHERE itemID = p_itemID;
+        RETURN v_start_price;
+    ELSE
+        RETURN v_max_bid;
+    END IF;
+END$$
+
+DELIMITER ;
+
+SELECT 
+    title, 
+    description, 
+    get_current_price(itemID) AS current_price
+FROM 
+    auction_item
+WHERE 
+    status = 'Listed';
+    
+    
+-- TRIGGER: after_item_payment
+-- Purpose: Checks if all items in an auction are paid for after an
+--          item's payment is registered (by updating its transactionID).
+--          If all items are paid, it updates the parent auction 
+--          status to 'Completed'.
+--
+DELIMITER $$
+
+CREATE TRIGGER after_item_payment
+AFTER UPDATE ON auction_item
+FOR EACH ROW
+BEGIN
+    DECLARE v_total_items INT;
+    DECLARE v_paid_items INT;
+    DECLARE v_auction_id_to_check VARCHAR(10);
+
+    -- This logic only runs if the transactionID was just added
+    -- (i.e., the item's status changed from unpaid to paid)
+    IF NEW.transactionID IS NOT NULL AND OLD.transactionID IS NULL THEN
+    
+        SET v_auction_id_to_check = NEW.auctionID;
+
+        -- 1. Count the total number of items in this auction
+        SELECT COUNT(*)
+        INTO v_total_items
+        FROM auction_item
+        WHERE auctionID = v_auction_id_to_check;
+
+        -- 2. Count the number of items in this auction that have a payment
+        SELECT COUNT(*)
+        INTO v_paid_items
+        FROM auction_item
+        WHERE auctionID = v_auction_id_to_check
+        AND transactionID IS NOT NULL;
+
+        -- 3. If all items in the auction are paid for,
+        --    mark the entire auction as 'Completed'.
+        IF v_total_items = v_paid_items THEN
+            UPDATE auction
+            SET status = 'Completed'
+            WHERE auctionID = v_auction_id_to_check;
+        END IF;
+
+    END IF;
+END$$
+
+DELIMITER ;
+
+UPDATE auction SET status = 'Ended' WHERE auctionID = 'A001';
+CALL sp_finalize_auction_item('I001');
+-- This UPDATE statement will cause the trigger to run:
+UPDATE auction_item 
+SET transactionID = 'T001' 
+WHERE itemID = 'I001';
+SELECT status FROM auction WHERE auctionID = 'A001';
+-- The status should now be 'Completed'
+
+UPDATE auction
+SET 
+    status = 'Active',
+    start_time = '2025-10-22 09:00:00',  -- Set start time to today
+    end_time = '2025-10-25 22:00:00'    -- Set end time to a few days from now
+WHERE 
+    auctionID = 'A001';
