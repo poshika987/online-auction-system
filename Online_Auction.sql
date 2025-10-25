@@ -67,6 +67,9 @@ alter table auction_item add constraint fk_transaction foreign key (transactionI
 alter table auction_item add constraint fk_category foreign key (categoryID) references category(categoryID) on update cascade on delete set null;
 alter table auction_item add constraint fk_auction foreign key (auctionID) references auction(auctionID) on update cascade on delete set null;
 
+ALTER TABLE payment ADD COLUMN itemID VARCHAR(10);
+ALTER TABLE payment ADD CONSTRAINT fk_payment_item FOREIGN KEY (itemID) REFERENCES auction_item(itemID);
+
 INSERT INTO customer VALUES
 ('C001','Alice Johnson','9876543210','alice@example.com','Delhi','pass123'),
 ('C002','Bob Smith','9123456789','bob@example.com','Mumbai','pass234'),
@@ -98,21 +101,109 @@ INSERT INTO auction_item VALUES
 INSERT INTO bid VALUES
 ('BID001',42000,NOW(),'C002','I001'),
 ('BID002',12500,NOW(),'C003','I002'),
-('BID003',3500,NOW(),'C004','I003'),
+('BID03',3500,NOW(),'C004','I003'),
 ('BID004',5500,NOW(),'C005','I004'),
 ('BID005',2500,NOW(),'C001','I005');
 
-INSERT INTO payment VALUES
-('T001',42000,'UPI','2025-09-06','C002'),   
-('T002',12500,'Credit/Debit Card','2025-09-07','C003'),
-('T003',3500,'Net Banking','2025-09-07','C004'), 
-('T004',5500,'UPI','2025-09-08','C005'),
-('T005',2500,'Credit/Debit Card','2025-09-08','C001');
+INSERT INTO payment (transactionID, amount, paymentMethod, PaymentDate, CustomerId, itemID) VALUES
+('T001', 42000, 'UPI', '2025-09-06', 'C002', 'I001'),
+('T002', 12500, 'Credit/Debit Card', '2025-09-07', 'C003', 'I002'),
+('T003', 3500, 'Net Banking', '2025-09-07', 'C004', 'I003'),
+('T004', 5500, 'UPI', '2025-09-08', 'C005', 'I004'),
+('T005', 2500, 'Credit/Debit Card', '2025-09-08', 'C001', 'I005');
+
+-- Trigger to prevent deletion of customers with active payments or bids
+DELIMITER $$
+CREATE TRIGGER before_customer_delete
+BEFORE DELETE ON customer
+FOR EACH ROW
+BEGIN
+    DECLARE active_bids INT;
+    DECLARE active_payments INT;
+
+    SELECT COUNT(*) INTO active_bids 
+    FROM bid 
+    WHERE custID = OLD.userID;
+
+    SELECT COUNT(*) INTO active_payments 
+    FROM payment 
+    WHERE CustomerId = OLD.userID;
+
+    IF active_bids > 0 OR active_payments > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Cannot delete customer with active bids or payments.';
+    END IF;
+END$$
+DELIMITER ;
+
+-- Trigger to check for duplicate payments and only allow payments for sold items
+DELIMITER $$
+CREATE TRIGGER before_payment_insert
+BEFORE INSERT ON payment
+FOR EACH ROW
+BEGIN
+    DECLARE v_paid INT;
+    DECLARE v_status ENUM('Sold','Listed');
+
+    -- Check for duplicate transaction IDs
+    SELECT COUNT(*) INTO v_paid 
+    FROM payment 
+    WHERE transactionID = NEW.transactionID;
+
+    IF v_paid > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Duplicate payment detected.';
+    END IF;
+
+    -- Check the status of the *specific item* this payment is for
+    SELECT status INTO v_status 
+    FROM auction_item 
+    WHERE itemID = NEW.itemID; 
+
+    -- Only allow payment if the item is marked as 'Sold'
+    IF v_status != 'Sold' THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Payment only allowed for items marked as ''Sold''.';
+    END IF;
+END$$
+DELIMITER ;
+
+-- Stored procedure to update status of  scheduled auction to active when start time has passed
+DELIMITER $$
+CREATE PROCEDURE sp_start_auction()
+BEGIN
+    UPDATE auction
+    SET status = 'Active'
+    WHERE status = 'Scheduled' 
+      AND start_time <= NOW();
+
+    SELECT 'Auctions started successfully.' AS Result;
+END$$
+DELIMITER ;
+
+-- Stored procedure to cancel auction and reset unsold items
+DELIMITER $$
+CREATE PROCEDURE sp_cancel_auction(
+    IN p_auctionID VARCHAR(10)
+)
+BEGIN
+    UPDATE auction
+    SET status = 'Cancelled'
+    WHERE auctionID = p_auctionID;
+
+    UPDATE auction_item
+    SET status = 'Listed',
+        transactionID = NULL
+    WHERE auctionID = p_auctionID
+      AND status != 'Sold';
+
+    SELECT CONCAT('Auction ', p_auctionID, ' cancelled and items reverted.') AS Result;
+END$$
+DELIMITER ;
 
 -- TRIGGER: before_bid_insert
 -- Purpose: Validates all new bids before they are inserted.
 -- Checks: 1. Auction is 'Active'. 2. NOW() is within auction time. 3. Bid is high enough.
---
 DELIMITER $$
 CREATE TRIGGER before_bid_insert
 BEFORE INSERT ON bid
@@ -146,11 +237,10 @@ BEGIN
         SET MESSAGE_TEXT = 'Your bid is too low. It must be higher than the current highest bid or the start price.';
     END IF;
 END$$
-DELIMITTER ;
+DELIMITER ;
 
 -- PROCEDURE: sp_place_bid
 -- Purpose: Simplifies the process of placing a bid. Uses UUID() for a unique bidID.
---
 DELIMITER $$
 CREATE PROCEDURE sp_place_bid(
     IN p_custID VARCHAR(10),
@@ -158,22 +248,34 @@ CREATE PROCEDURE sp_place_bid(
     IN p_amount INT
 )
 BEGIN
-    -- The 'before_bid_insert' trigger will fire automatically to validate this insert.
     INSERT INTO bid (bidID, custID, itemID, amount, bid_time)
     VALUES (UUID(), p_custID, p_itemID, p_amount, NOW());
     
     SELECT 'Bid placed successfully.' AS message;
 END$$
 DELIMITER ;
-CALL sp_place_bid('C005', 'I001', 4300); -- This will work
+
+
+-- TEST BLOCK FOR: before_bid_insert
+-- SETUP: Make sure Auction A001 is 'Active' and the time is valid.
+-- This is needed for the 'before_bid_insert' trigger's first check to pass.
+UPDATE auction
+SET 
+    status = 'Active',
+    start_time = NOW() - INTERVAL 1 DAY, 
+    end_time = NOW() + INTERVAL 2 DAY  
+WHERE 
+    auctionID = 'A001';
+
+-- CASE 1.1: 'before_bid_insert' IS CALLED (and FAILS validation)
 CALL sp_place_bid('C001', 'I001', 40000); -- This will fail (bid too low)
 
+-- CASE 1.2: 'before_bid_insert' IS CALLED (and PASSES)
+CALL sp_place_bid('C005', 'I001', 43000); -- This will work
 
---
 -- PROCEDURE: sp_finalize_auction_item
 -- Purpose: Checks winning bid against reserve price and updates item status to 'Sold'.
 -- Run this after an auction status has been manually set to 'Ended'.
---
 DELIMITER $$
 CREATE PROCEDURE sp_finalize_auction_item(
     IN p_itemID VARCHAR(10)
@@ -220,13 +322,31 @@ BEGIN
         SELECT CONCAT('Cannot finalize item. Auction status is: ', v_auction_status) AS Result;
     END IF;
 END$$
-DELIMITTER ;
+DELIMITER ; 
+
+
+-- TEST BLOCK FOR: sp_finalize_auction_item
+
+-- CASE 7.1: PROCEDURE IS CALLED (Item NOT sold - Reserve not met)
 UPDATE auction SET status = 'Ended' WHERE auctionID = 'A001';
+
 CALL sp_finalize_auction_item('I001');
---
+-- Verify status is unchanged
+SELECT status FROM auction_item WHERE itemID = 'I001'; -- Should still be 'Listed'
+
+-- CASE 7.2: PROCEDURE IS CALLED (Item IS sold - Reserve met)
+UPDATE auction SET status = 'Active', start_time = NOW() - INTERVAL 1 DAY, end_time = NOW() + INTERVAL 1 DAY WHERE auctionID = 'A004';
+CALL sp_place_bid('C001', 'I004', 7500); -- Bid 7500 (is >= reserve of 7000)
+-- Now, end the auction
+UPDATE auction SET status = 'Ended' WHERE auctionID = 'A004';
+-- This call will result in "Item I004 sold"
+CALL sp_finalize_auction_item('I004');
+-- Verify status is now 'Sold'
+SELECT status FROM auction_item WHERE itemID = 'I004'; -- Should now be 'Sold'
+
+
 -- FUNCTION: get_current_price
 -- Purpose: Returns the current highest bid for an item, or its start price if no bids exist.
---
 DELIMITER $$
 CREATE FUNCTION get_current_price(
     p_itemID VARCHAR(10)
@@ -251,14 +371,15 @@ END$$
 
 DELIMITER ;
 
+-- TEST BLOCK FOR: get_current_price
+
 SELECT 
     title, 
-    description, 
     get_current_price(itemID) AS current_price
 FROM 
     auction_item
 WHERE 
-    status = 'Listed';
+    itemID IN ('I001', 'I004', 'I005');
     
     
 -- TRIGGER: after_item_payment
@@ -266,7 +387,7 @@ WHERE
 --          item's payment is registered (by updating its transactionID).
 --          If all items are paid, it updates the parent auction 
 --          status to 'Completed'.
---
+
 DELIMITER $$
 
 CREATE TRIGGER after_item_payment
@@ -309,19 +430,98 @@ END$$
 
 DELIMITER ;
 
-UPDATE auction SET status = 'Ended' WHERE auctionID = 'A001';
-CALL sp_finalize_auction_item('I001');
--- This UPDATE statement will cause the trigger to run:
-UPDATE auction_item 
-SET transactionID = 'T001' 
-WHERE itemID = 'I001';
-SELECT status FROM auction WHERE auctionID = 'A001';
--- The status should now be 'Completed'
+-- TEST BLOCK FOR: after_item_payment
 
+-- CASE 2.1: TRIGGER IS CALLED
+-- We simulate a payment by setting the transactionID from NULL to 'T001'.
+
+UPDATE auction_item 
+SET transactionID = 'T004' 
+WHERE itemID = 'I004';
+
+SELECT status FROM auction WHERE auctionID = 'A004'; -- The status should now be 'Completed'
+
+
+-- TEST BLOCK FOR: before_customer_delete
+
+
+-- CASE 3.1: TRIGGER IS CALLED (and FAILS validation)
+-- Customer 'C001' has bids ('BID005', etc.) and payments ('T005').
+-- The trigger will count these and block the DELETE.
+DELETE FROM customer WHERE userID = 'C001'; -- This will fail
+
+-- CASE 3.2: TRIGGER IS CALLED (and PASSES)
+-- We create a new customer with no history, then delete them.
+INSERT INTO customer VALUES
+('C999','Test User','1111111111','test@example.com','Test Address','testpass');
+-- This DELETE fires the trigger. The trigger finds 0 bids and 0 payments
+-- and allows the DELETE to proceed.
+DELETE FROM customer WHERE userID = 'C999';
+
+-- TEST BLOCK FOR: before_payment_insert
+
+-- CASE 4.1: TRIGGER IS CALLED (and FAILS - Duplicate payment)
+-- We try to insert a payment with transactionID 'T001', which already exists.
+-- The trigger's first check will catch this and raise an error.
+-- (We use 'I004' as it's 'Sold', so we pass the *second* check)
+INSERT INTO payment (transactionID, amount, paymentMethod, PaymentDate, CustomerId, itemID) 
+VALUES ('T001', 99, 'UPI', NOW(), 'C001', 'I004'); -- This will fail (Duplicate transactionID)
+
+-- CASE 4.2: TRIGGER IS CALLED (and FAILS - Item not Sold)
+-- We try to insert a payment for item 'I002', which is still 'Listed'.
+-- We use a new transactionID 'T998' to pass the *first* check.
+INSERT INTO payment (transactionID, amount, paymentMethod, PaymentDate, CustomerId, itemID) 
+VALUES ('T998', 99, 'UPI', NOW(), 'C001', 'I002'); -- This will fail (I002 is 'Listed')
+
+-- CASE 4.3: TRIGGER IS CALLED (and SUCCEEDS)
+-- We use item 'I004' which was marked 'Sold' in test 7.2.
+-- We use a new transactionID 'T999'.
+-- NOTE: We already added payment 'T004' for item 'I004', but the trigger
+-- doesn't prevent multiple payments for the same item, only duplicate Transaction IDs.
+INSERT INTO payment (transactionID, amount, paymentMethod, PaymentDate, CustomerId, itemID) 
+VALUES ('T1000', 99, 'UPI', CURDATE(), 'C001', 'I004'); -- This will succeed 
+
+-- Verify insert
+SELECT * FROM payment WHERE transactionID = 'T1000';
+
+
+-- TEST BLOCK FOR: sp_start_auction
+
+-- CASE 5.1: PROCEDURE IS CALLED
+-- SETUP: Auction 'A002' is 'Scheduled' for a future date.
+-- We update it to be in the past so the procedure will find it.
+UPDATE auction 
+SET start_time = NOW() - INTERVAL 1 DAY 
+WHERE auctionID = 'A002';
+-- Check status before:
+SELECT status FROM auction WHERE auctionID = 'A002'; -- Should be 'Scheduled'
+-- CALL the procedure
+CALL sp_start_auction();
+-- Check status after:
+SELECT status FROM auction WHERE auctionID = 'A002'; -- Should now be 'Active'
+
+
+-- TEST BLOCK FOR: sp_cancel_auction
+
+
+-- CASE 6.1: PROCEDURE IS CALLED
+-- We will cancel Auction 'A003', which contains item 'I005'.
+-- Check status before:
+SELECT status FROM auction WHERE auctionID = 'A003'; -- Should be 'Scheduled'
+SELECT status FROM auction_item WHERE itemID = 'I005'; -- Should be 'Listed'
+-- CALL the procedure
+CALL sp_cancel_auction('A003');
+-- Check status after:
+SELECT status FROM auction WHERE auctionID = 'A003'; -- Should be 'Cancelled'
+SELECT status FROM auction_item WHERE itemID = 'I005'; -- Should still be 'Listed'
+
+-- Test for sp_place_bid
 UPDATE auction
 SET 
     status = 'Active',
-    start_time = '2025-10-22 09:00:00',  -- Set start time to today
-    end_time = '2025-10-25 22:00:00'    -- Set end time to a few days from now
+    start_time = NOW() - INTERVAL 1 DAY,
+    end_time = NOW() + INTERVAL 1 DAY
 WHERE 
-    auctionID = 'A001';
+    auctionID = 'A005';
+CALL sp_place_bid('C001', 'I002', 13000);
+SELECT * FROM bid WHERE amount = 13000;
