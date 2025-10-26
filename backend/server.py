@@ -265,7 +265,12 @@ def get_unpaid_winnings(custID):
         FROM 
             auction_item
         WHERE 
-            winnerID = %s AND transactionID IS NULL;
+            itemID IN (
+                SELECT ai2.itemID
+                FROM auction_item ai2
+                WHERE ai2.winnerID = %s
+                  AND ai2.transactionID IS NULL
+            );
         """
         cursor.execute(query, (custID,))
         items = cursor.fetchall()
