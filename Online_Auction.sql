@@ -206,43 +206,79 @@ BEGIN
 END$$
 DELIMITER ;
 
+DELIMITER $$
+CREATE PROCEDURE sp_update_auction_status(IN p_auctionID VARCHAR(10))
+BEGIN
+    -- 1. Check if a 'Scheduled' auction should become 'Active'
+    UPDATE auction
+    SET status = 'Active'
+    WHERE auctionID = p_auctionID
+      AND status = 'Scheduled'
+      AND NOW() BETWEEN start_time AND end_time;
+
+    -- 2. Check if an 'Active' auction should 'End'
+    UPDATE auction
+    SET status = 'Ended'
+    WHERE auctionID = p_auctionID
+      AND status = 'Active'
+      AND NOW() >= end_time;
+END$$
+DELIMITTER ;
+
 -- TRIGGER: before_bid_insert
 -- Purpose: Validates all new bids before they are inserted.
 -- Checks: 1. Auction is 'Active'. 2. NOW() is within auction time. 3. Bid is high enough.
+-- Drop the old trigger so we can replace it
+
+-- Create the new, smarter trigger
 DELIMITER $$
 CREATE TRIGGER before_bid_insert
 BEFORE INSERT ON bid
 FOR EACH ROW
 BEGIN
+    DECLARE v_auctionID VARCHAR(10);
     DECLARE v_auction_status ENUM('Scheduled','Active','Ended','Completed','Cancelled');
-    DECLARE v_auction_start DATETIME;
-    DECLARE v_auction_end DATETIME;
     DECLARE v_start_price INT;
     DECLARE v_current_max_bid INT;
 
-    -- 1. Get the auction status, times, and item start price
-    SELECT a.status, a.start_time, a.end_time, ai.start_price
-    INTO v_auction_status, v_auction_start, v_auction_end, v_start_price
+    -- 1. Get the auctionID for the item being bid on
+    SELECT auctionID INTO v_auctionID
+    FROM auction_item
+    WHERE itemID = NEW.itemID;
+
+    -- 2. CALL THE PROCEDURE to update the auction's status
+    -- This makes sure the status is correct BEFORE we check it.
+    IF v_auctionID IS NOT NULL THEN
+        CALL sp_update_auction_status(v_auctionID);
+    END IF;
+    
+    -- 3. Get the (now updated) auction status and item start price
+    SELECT a.status, ai.start_price
+    INTO v_auction_status, v_start_price
     FROM auction a
     JOIN auction_item ai ON a.auctionID = ai.auctionID
     WHERE ai.itemID = NEW.itemID;
 
-    -- 2. Check if the auction is active and within the time window
-    IF v_auction_status != 'Active' OR NOW() NOT BETWEEN v_auction_start AND v_auction_end THEN
+    -- 4. Check if the auction is 'Active'
+    -- If the procedure updated it, this check will now pass.
+    -- If it's still 'Scheduled' or 'Ended', this will fail.
+    IF v_auction_status != 'Active' THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Bidding is not allowed. The auction is not active or is outside the bidding window.';
+        SET MESSAGE_TEXT = 'Bidding is not allowed. The auction is not active.';
     END IF;
 
-    -- 3. Get the current highest bid for this item
+    -- 5. Get the current highest bid for this item
     SELECT MAX(amount) INTO v_current_max_bid FROM bid WHERE itemID = NEW.itemID;
 
-    -- 4. Check if the new bid is high enough
+    -- 6. Check if the new bid is high enough
     IF NEW.amount <= IFNULL(v_current_max_bid, v_start_price) THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Your bid is too low. It must be higher than the current highest bid or the start price.';
     END IF;
 END$$
-DELIMITER ;
+DELIMITTER ;
+
+
 
 -- PROCEDURE: sp_place_bid
 -- Purpose: Simplifies the process of placing a bid. Uses UUID() for a unique bidID.
@@ -531,6 +567,12 @@ DELIMITER ;
 -- CALL sp_place_bid('C001', 'I002', 13000);
 -- SELECT * FROM bid WHERE amount = 13000;
 
+-- Drop users first, as they might be connected
+DROP USER IF EXISTS 'auction_admin'@'localhost';
+DROP USER IF EXISTS 'auction_user1'@'localhost';
+
+-- Drop roles
+DROP ROLE IF EXISTS 'auction_admin_role', 'auction_user_role';
 
 -- User & Privilege Management 
 
@@ -553,6 +595,7 @@ GRANT EXECUTE ON FUNCTION auction.get_current_price TO 'auction_user_role';
 GRANT EXECUTE ON PROCEDURE auction.sp_place_bid TO 'auction_user_role';
 
 
+
 -- Create the USERS
 CREATE USER 'auction_admin'@'localhost' IDENTIFIED BY '123';
 CREATE USER 'auction_user1'@'localhost' IDENTIFIED BY '456';
@@ -567,4 +610,13 @@ SET DEFAULT ROLE 'auction_admin_role' TO 'auction_admin'@'localhost';
 SET DEFAULT ROLE 'auction_user_role' TO 'auction_user1'@'localhost';
 
 FLUSH PRIVILEGES;
+
+UPDATE auction
+SET end_time = '2025-10-26 20:08:00'
+WHERE auctionID = 'A100';
+
+UPDATE auction
+SET STATUS = 'Ended'
+WHERE auctionID = 'A100';
+
 

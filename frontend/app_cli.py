@@ -48,20 +48,19 @@ def show_help():
         print("  6: View my unpaid winnings") 
         print("  7: Pay for a won item")     
 
-        print("\n--- Admin / Auctioneer Tasks ---")
+        print("\nAuctioneer Tasks ---")
         print("  8: Create a new auction")   
-        print("  9: Create a new item")  
-        print("  10: Start all scheduled auctions") 
-        print("  11: Finalize bidding for an item") 
-        print("  12: Cancel an auction")           
-        print("  13: Delete a customer")
-        print("  14: List all Auctions") 
-
-        print("\n--- Reporting Tasks ---")
-        print("  15: List all registered customers")
-        print("  16: See all bids from one customer") 
-        print("  17: See all items in one auction")  
-        print("  18: Count admins & customers") 
+        print("  9: Create a new item")   
+        print("  10: List all Auctions") 
+        print("\n--- Admin Tasks ---")
+        print("  11: List all registered customers")
+        print("  12: See all bids from one customer") 
+        print("  13: See all items in one auction")  
+        print("  14: Count admins & customers") 
+        print("  15: Start all scheduled auctions")
+        print("  16: Finalize bidding for an item") 
+        print("  17: Delete a customer")
+        print("  18: Cancel an auction")
         
         print("\n  help: Show this menu")
         print("  quit: Exit the application")
@@ -87,6 +86,14 @@ def login():
             
     except requests.exceptions.ConnectionError:
         print("\n[Error] Could not connect to server.")
+
+def get_current_user_id(prompt_if_missing=True):
+    global g_logged_in_user
+    if g_logged_in_user and g_logged_in_user.get('userID'):
+        return g_logged_in_user['userID']
+    if prompt_if_missing:
+        return input("  Enter your CustomerID: ").strip()
+    return None
 
 def logout():
     global g_logged_in_user
@@ -165,10 +172,12 @@ def view_item_details():
 
 def view_unpaid_winnings():
     print("--- 6: View my unpaid winnings ---")
-    cust_id = input("  Enter your CustomerID: ")
+    cust_id = get_current_user_id(prompt_if_missing=True)
     if not cust_id:
         print("[Error] CustomerID is required.")
         return
+    if g_logged_in_user:
+        print(f"(Using logged-in CustomerID: {cust_id})")
         
     try:
         response = requests.get(f"{BASE_URL}/customers/{cust_id}/winnings")
@@ -215,10 +224,15 @@ def pay_for_item():
     print("--- 7: Pay for a won item ---")
     print("NOTE: This will only work if the item is 'Sold'.")
     
-    cust_id = input("  Enter your CustomerID: ")
+    cust_id = get_current_user_id(prompt_if_missing=False)
+    if not cust_id:
+        print("[Error] You must be logged in to pay for an item.")
+        return
+    print(f"(Using logged-in CustomerID: {cust_id})")
+
     item_id = input("  Enter the ItemID you want to pay for: ")
-    if not all([cust_id, item_id]):
-        print("[Error] CustomerID and ItemID are required.")
+    if not item_id:
+        print("[Error] ItemID is required.")
         return
         
     method = input("  Enter payment method (UPI, Credit/Debit Card, Net Banking): ")
@@ -380,10 +394,14 @@ def list_all_auctions():
 
 def list_bids_by_customer():
     print("--- 14: See all bids from one customer ---")
-    cust_id = input("  Enter CustomerID (e.g., C001): ")
-    if not cust_id:
-        print("[Error] CustomerID is required.")
-        return
+    cust_id = get_current_user_id(prompt_if_missing=False)
+    if cust_id:
+        print(f"(Using logged-in CustomerID: {cust_id})")
+    else:
+        cust_id = input("  Enter CustomerID (e.g., C001): ").strip()
+        if not cust_id:
+            print("[Error] CustomerID is required.")
+            return
         
     try:
         response = requests.get(f"{BASE_URL}/customers/{cust_id}/bids")
@@ -426,23 +444,29 @@ def main():
         '0': login,    
         'logout': logout,
         '1': register_customer,
+
         '2': update_profile,
+
         '3': browse_items,
         '4': view_item_details,
         '5': place_bid,
         '6': view_unpaid_winnings,  
         '7': pay_for_item,
+
         '8': create_auction,
         '9': create_item,
-        '10': start_auctions,
-        '11': finalize_item,
-        '12': cancel_auction,
-        '13': delete_customer,
-        '14': list_all_auctions,
-        '15': list_all_customers,
-        '16': list_bids_by_customer,
-        '17': list_items_in_auction,
-        '18': list_user_counts,
+        '10': list_all_auctions,
+
+        '11': list_all_customers,
+        '12': list_bids_by_customer,
+        '13': list_items_in_auction,
+        '14': list_user_counts,
+
+        '15': start_auctions,
+        '16': finalize_item,
+        '17': delete_customer,
+        '18': cancel_auction,
+
         'help': show_help
     }
     
