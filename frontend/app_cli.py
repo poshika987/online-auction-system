@@ -54,12 +54,13 @@ def show_help():
         print("  10: Start all scheduled auctions") 
         print("  11: Finalize bidding for an item") 
         print("  12: Cancel an auction")           
-        print("  13: Delete a customer") 
+        print("  13: Delete a customer")
+        print("  14: List all Auctions") 
 
         print("\n--- Reporting Tasks ---")
-        print("  14: List all registered customers")
-        print("  15: See all bids from one customer") 
-        print("  16: See all items in one auction")  
+        print("  15: List all registered customers")
+        print("  16: See all bids from one customer") 
+        print("  17: See all items in one auction")  
 
         print("\n  help: Show this menu")
         print("  quit: Exit the application")
@@ -356,6 +357,26 @@ def list_all_customers():
     except requests.exceptions.ConnectionError:
         print("\n[Error] Could not connect to server.")
 
+def list_all_auctions():
+    print("--- 17: See all auctions (list details) ---")
+    try:
+        response = requests.get(f"{BASE_URL}/auctions")
+        print_response(response)
+        if response.status_code == 200:
+            try:
+                auctions = response.json()
+                if isinstance(auctions, list) and auctions:
+                    print("\n--- Auction Details ---")
+                    for a in auctions:
+                        print(f"AuctionID: {a.get('auctionID')} | Name: {a.get('auction_name')} | "
+                              f"Start: {a.get('start_time')} | End: {a.get('end_time')} | "
+                              f"Status: {a.get('status')} | Auctioneer: {a.get('userID')}")
+                    print("------------------------\n")
+            except Exception:
+                pass
+    except requests.exceptions.ConnectionError:
+        print("\n[Error] Could not connect to server.")
+
 def list_bids_by_customer():
     print("--- 14: See all bids from one customer ---")
     cust_id = input("  Enter CustomerID (e.g., C001): ")
@@ -384,9 +405,7 @@ def list_items_in_auction():
 
 # --- Main Loop ---
 
-def main():
-    show_help()
-    
+def main():    
     command_map = {
         '0': login,    
         'logout': logout,
@@ -403,13 +422,15 @@ def main():
         '11': finalize_item,
         '12': cancel_auction,
         '13': delete_customer,
-        '14': list_all_customers,
-        '15': list_bids_by_customer,
-        '16': list_items_in_auction,
+        '14': list_all_auctions,
+        '15': list_all_customers,
+        '16': list_bids_by_customer,
+        '17': list_items_in_auction,
         'help': show_help
     }
     
     while True:
+        show_help()
         command = input("Enter command (or 'help'/'quit'): ").strip().lower()
         
         if command == 'quit':

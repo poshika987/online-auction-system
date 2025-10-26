@@ -382,6 +382,32 @@ def create_auction():
         if cursor: cursor.close()
         if conn: conn.close()
 
+@app.route('/auctions', methods=['GET'])
+def list_auctions():
+    """
+    Returns a list of all auctions with details.
+    Fields: auctionID, auction_name, start_time, end_time, status, userID
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_user_connection()
+        cursor = conn.cursor(dictionary=True)
+        query = "SELECT auctionID, auction_name, start_time, end_time, status, userID FROM auction ORDER BY start_time;"
+        cursor.execute(query)
+        auctions = cursor.fetchall()
+        for a in auctions:
+            if isinstance(a['start_time'], datetime):
+                a['start_time'] = a['start_time'].strftime("%a, %d %b %Y %H:%M:%S IST")
+            if isinstance(a['end_time'], datetime):
+                a['end_time'] = a['end_time'].strftime("%a, %d %b %Y %H:%M:%S IST")
+        return jsonify(auctions), 200
+    except mysql.connector.Error as e:
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
 @app.route('/items', methods=['POST'])
 def create_item():
     data = request.get_json()
