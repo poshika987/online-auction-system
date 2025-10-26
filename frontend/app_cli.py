@@ -61,7 +61,8 @@ def show_help():
         print("  15: List all registered customers")
         print("  16: See all bids from one customer") 
         print("  17: See all items in one auction")  
-
+        print("  18: Count admins & customers") 
+        
         print("\n  help: Show this menu")
         print("  quit: Exit the application")
         print("--------------------------------\n")
@@ -403,6 +404,21 @@ def list_items_in_auction():
     except requests.exceptions.ConnectionError:
         print("\n[Error] Could not connect to server.")
 
+
+def list_user_counts():
+    print("--- 18: Count admins & customers ---")
+    try:
+        response = requests.get(f"{BASE_URL}/stats/user_counts")
+        print_response(response)
+        if response.status_code == 200:
+            counts = response.json()
+            print("\n--- Counts ---")
+            for row in counts:
+                print(f"  {row.get('role')}: {row.get('count')}")
+            print("--------------\n")
+    except requests.exceptions.ConnectionError:
+        print("\n[Error] Could not connect to server.")
+
 # --- Main Loop ---
 
 def main():    
@@ -426,6 +442,7 @@ def main():
         '15': list_all_customers,
         '16': list_bids_by_customer,
         '17': list_items_in_auction,
+        '18': list_user_counts,
         'help': show_help
     }
     

@@ -506,6 +506,35 @@ def finalize_item(itemID):
         if cursor: cursor.close()
         if conn: conn.close()
 
+@app.route('/stats/user_counts', methods=['GET'])
+def user_counts():
+    """
+    Returns counts grouped by role:
+      - 'customers' => total rows in customer
+      - 'admins'    => distinct users referenced as auctioneers in auction.userID
+    Uses GROUP BY and COUNT in a derived table.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_user_connection()
+        cursor = conn.cursor(dictionary=True)
+        query = """
+        SELECT role, COUNT(*) AS count FROM (
+            SELECT userID, 'customers' AS role FROM customer
+            UNION ALL
+            SELECT DISTINCT userID, 'admins' AS role FROM auction
+        ) t
+        GROUP BY role;
+        """
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        return jsonify(rows), 200
+    except mysql.connector.Error as e:
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
