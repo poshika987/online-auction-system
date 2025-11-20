@@ -85,31 +85,57 @@ def place_bid():
     data = request.get_json()
     if not data or 'custID' not in data or 'itemID' not in data or 'amount' not in data:
         return jsonify({"error": "Missing data"}), 400
-    
+
     if not isinstance(data['amount'], int):
         return jsonify({"error": "Invalid data type. 'amount' must be an integer."}), 400
-        
+
     p_custID, p_itemID, p_amount = data['custID'], data['itemID'], data['amount']
     conn = None
     cursor = None
     try:
-        conn = get_user_connection() 
+        conn = get_user_connection()
         if conn is None:
             return jsonify({"error": "Could not connect to database"}), 500
-            
+
         cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT a.auctionID, a.end_time, a.status
+            FROM auction_item ai
+            JOIN auction a ON ai.auctionID = a.auctionID
+            WHERE ai.itemID = %s
+        """, (p_itemID,))
+        auction = cursor.fetchone()
+        if not auction:
+            return jsonify({"error": "Item or auction not found"}), 404
+
+        now = datetime.now()
+        if auction['end_time'] and auction['end_time'] < now:
+            if auction['status'] != 'Ended':
+                # Best-effort: call a stored procedure (define it with SQL SECURITY DEFINER)
+                try:
+                    cursor.callproc('sp_mark_auction_ended', (auction['auctionID'],))
+                    conn.commit()
+                except mysql.connector.Error:
+                    pass  # Ignore if procedure missing or insufficient privilege
+            return jsonify({"error": "Auction has ended. Bid rejected."}), 400
+
+        if auction['status'] == 'Ended':
+            return jsonify({"error": "Auction already ended. Bid rejected."}), 400
+
         cursor.callproc('sp_place_bid', (p_custID, p_itemID, p_amount))
         conn.commit()
         result = get_proc_result(cursor)
         return jsonify({"message": "Bid placed successfully!", "result": result}), 201
     except mysql.connector.Error as e:
-        if e.sqlstate == '45000': 
+        if conn: conn.rollback()
+        if e.sqlstate == '45000':
             return jsonify({"error": "Bid rejected", "details": e.msg}), 400
-        else:
-            return jsonify({"error": "Database error", "details": str(e)}), 500
+        return jsonify({"error": "Database error", "details": str(e)}), 500
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+        
+
 
 @app.route('/customers', methods=['GET'])
 def get_customers():
@@ -134,14 +160,31 @@ def create_customer():
     if not data or not all(field in data for field in required):
         return jsonify({"error": "Missing data"}), 400
 
+    # Basic normalization
+    data['userID'] = data['userID'].strip()
+    data['email'] = data['email'].strip().lower()
+
     conn = None
     cursor = None
     try:
         conn = get_user_connection()
-        cursor = conn.cursor()
-        query = "INSERT INTO customer VALUES (%s, %s, %s, %s, %s, %s)"
-        cursor.execute(query, (data['userID'], data['name'], data['phone'], 
-                               data['email'], data['address'], data['password']))
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute(
+            "SELECT userID FROM customer WHERE userID = %s OR email = %s",
+            (data['userID'], data['email'])
+        )
+        if cursor.fetchone():
+            return jsonify({"error": "User already exists"}), 409
+
+        insert_sql = """
+            INSERT INTO customer (userID, name, phone, email, address, password)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(insert_sql, (
+            data['userID'], data['name'], data['phone'],
+            data['email'], data['address'], data['password']
+        ))
         conn.commit()
         return jsonify({"message": "Customer created successfully"}), 201
     except mysql.connector.Error as e:

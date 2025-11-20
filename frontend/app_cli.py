@@ -102,7 +102,7 @@ def logout():
     print("Logout successful.")
 
 def register_customer():
-    print("--- 1: Register as a new customer ---")
+    print(": Register as a new customer ---")
     print("Enter your details (press Enter for default):")
     
     user_id = input("  userID (e.g., C999): ") or f"C{uuid.uuid4().hex[:3]}"
@@ -125,7 +125,7 @@ def register_customer():
         print("\n[Error] Could not connect to server. Is app.py running?")
 
 def update_profile():
-    print("--- 2: Update my profile ---")
+    print(": Update my profile ---")
     cust_id = input("  Enter CustomerID to update (e.g., C005): ")
     if not cust_id:
         print("[Error] CustomerID is required.")
@@ -150,7 +150,7 @@ def update_profile():
         print("\n[Error] Could not connect to server.")
 
 def browse_items():
-    print("--- 3: Browsing all items for sale ---")
+    print(" Browsing all items for sale ---")
     try:
         response = requests.get(f"{BASE_URL}/items")
         print_response(response)
@@ -158,7 +158,7 @@ def browse_items():
         print("\n[Error] Could not connect to server. Is app.py running?")
 
 def view_item_details():
-    print("--- 4: View details for a single item ---")
+    print(" View details for a single item ---")
     item_id = input("  Enter itemID (e.g., I001): ")
     if not item_id:
         print("[Error] itemID cannot be empty.")
@@ -171,7 +171,7 @@ def view_item_details():
         print("\n[Error] Could not connect to server.")
 
 def view_unpaid_winnings():
-    print("--- 6: View my unpaid winnings ---")
+    print(" View my unpaid winnings ---")
     cust_id = get_current_user_id(prompt_if_missing=True)
     if not cust_id:
         print("[Error] CustomerID is required.")
@@ -197,7 +197,7 @@ def place_bid():
         print("[Error] You must be logged in to place a bid.")
         return
 
-    print("--- 5: Place a bid on an item ---")
+    print(" Place a bid on an item ---")
     cust_id = g_logged_in_user['userID'] 
     item_id = input("  Enter the ItemID (e.g., I001): ")
 
@@ -221,7 +221,7 @@ def place_bid():
         print("\n[Error] Could not connect to server.")
 
 def pay_for_item():
-    print("--- 7: Pay for a won item ---")
+    print(" Pay for a won item ---")
     print("NOTE: This will only work if the item is 'Sold'.")
     
     cust_id = get_current_user_id(prompt_if_missing=False)
@@ -255,7 +255,7 @@ def pay_for_item():
 # --- Admin Functions ---
 
 def create_auction():
-    print("--- 7: Create a new auction ---")
+    print(" Create a new auction ---")
     print("NOTE: 'userID' is the CustomerID of the auctioneer (admin).")
     auction_id = input("  AuctionID (e.g., A100): ")
     name = input("  Auction Name (e.g., Vintage Watch Sale): ")
@@ -279,7 +279,7 @@ def create_auction():
         print("\n[Error] Could not connect to server.")
 
 def create_item():
-    print("--- 8: Create a new item for auction ---")
+    print(" Create a new item for auction ---")
     item_id = input("  ItemID (e.g., I100): ")
     title = input("  Title (e.g., Rolex Watch): ")
     desc = input("  Description (optional): ")
@@ -305,7 +305,7 @@ def create_item():
         print("\n[Error] Could not connect to server.")
 
 def start_auctions():
-    print("--- 9: Start all scheduled auctions ---")
+    print(" Start all scheduled auctions ---")
     print("This will call 'sp_start_auction' to find and activate any due auctions.")
     input("Press Enter to continue...")
     try:
@@ -315,7 +315,7 @@ def start_auctions():
         print("\n[Error] Could not connect to server.")
 
 def finalize_item():
-    print("--- 10: Finalize bidding for an item ---")
+    print("0: Finalize bidding for an item ---")
     print("NOTE: The auction must be 'Ended' for this to work.")
     
     item_id = input("  Enter itemID to finalize (e.g., I100): ")
@@ -332,7 +332,7 @@ def finalize_item():
         print("\n[Error] Could not connect to server.")
 
 def cancel_auction():
-    print("--- 11: Cancel an auction ---")
+    print("1: Cancel an auction ---")
     auction_id = input("  Enter auctionID to cancel (e.g., A003): ")
     if not auction_id:
         print("[Error] auctionID cannot be empty.")
@@ -346,7 +346,7 @@ def cancel_auction():
         print("\n[Error] Could not connect to server.")
 
 def delete_customer():
-    print("--- 12: (DANGEROUS) Delete a customer ---")
+    print("2: (DANGEROUS) Delete a customer ---")
     cust_id = input("  Enter CustomerID to delete (e.g., C001): ")
     if not cust_id:
         print("[Error] CustomerID is required.")
@@ -365,7 +365,7 @@ def delete_customer():
 # --- Reporting Functions ---
 
 def list_all_customers():
-    print("--- 13: List all registered customers ---")
+    print("3: List all registered customers ---")
     try:
         response = requests.get(f"{BASE_URL}/customers")
         print_response(response)
@@ -373,7 +373,7 @@ def list_all_customers():
         print("\n[Error] Could not connect to server.")
 
 def list_all_auctions():
-    print("--- 17: See all auctions (list details) ---")
+    print(" See all auctions (list details) ---")
     try:
         response = requests.get(f"{BASE_URL}/auctions")
         print_response(response)
@@ -393,7 +393,7 @@ def list_all_auctions():
         print("\n[Error] Could not connect to server.")
 
 def list_bids_by_customer():
-    print("--- 14: See all bids from one customer ---")
+    print(" See all bids from one customer ---")
     cust_id = get_current_user_id(prompt_if_missing=False)
     if cust_id:
         print(f"(Using logged-in CustomerID: {cust_id})")
@@ -410,7 +410,7 @@ def list_bids_by_customer():
         print("\n[Error] Could not connect to server.")
 
 def list_items_in_auction():
-    print("--- 15: See all items in one auction ---")
+    print(" See all items in one auction ---")
     auction_id = input("  Enter AuctionID (e.g., A001): ")
     if not auction_id:
         print("[Error] AuctionID is required.")
@@ -424,7 +424,7 @@ def list_items_in_auction():
 
 
 def list_user_counts():
-    print("--- 18: Count admins & customers ---")
+    print(" Count admins & customers ---")
     try:
         response = requests.get(f"{BASE_URL}/stats/user_counts")
         print_response(response)

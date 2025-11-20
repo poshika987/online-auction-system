@@ -193,6 +193,8 @@ CREATE PROCEDURE sp_cancel_auction(
 )
 BEGIN
     UPDATE auction
+    
+    
     SET status = 'Cancelled'
     WHERE auctionID = p_auctionID;
 
