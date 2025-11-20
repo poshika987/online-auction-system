@@ -1,7 +1,6 @@
 drop database auction;
 create database auction;
 use auction;
-
 create table customer
 (
 userID varchar(10) not null,
@@ -149,22 +148,18 @@ FOR EACH ROW
 BEGIN
     DECLARE v_paid INT;
     DECLARE v_status ENUM('Sold','Listed');
-
     -- Check for duplicate transaction IDs
     SELECT COUNT(*) INTO v_paid 
     FROM payment 
     WHERE transactionID = NEW.transactionID;
-
     IF v_paid > 0 THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'Duplicate payment detected.';
     END IF;
-
     -- Check the status of the *specific item* this payment is for
     SELECT status INTO v_status 
     FROM auction_item 
     WHERE itemID = NEW.itemID; 
-
     -- Only allow payment if the item is marked as 'Sold'
     IF v_status != 'Sold' THEN
         SIGNAL SQLSTATE '45000' 
@@ -253,7 +248,6 @@ BEGIN
     IF v_auctionID IS NOT NULL THEN
         CALL sp_update_auction_status(v_auctionID);
     END IF;
-    
     -- 3. Get the (now updated) auction status and item start price
     SELECT a.status, ai.start_price
     INTO v_auction_status, v_start_price
@@ -268,10 +262,8 @@ BEGIN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Bidding is not allowed. The auction is not active.';
     END IF;
-
     -- 5. Get the current highest bid for this item
     SELECT MAX(amount) INTO v_current_max_bid FROM bid WHERE itemID = NEW.itemID;
-
     -- 6. Check if the new bid is high enough
     IF NEW.amount <= IFNULL(v_current_max_bid, v_start_price) THEN
         SIGNAL SQLSTATE '45000'
@@ -298,23 +290,6 @@ BEGIN
 END$$
 DELIMITER ;
 
-
--- TEST BLOCK FOR: before_bid_insert
--- SETUP: Make sure Auction A001 is 'Active' and the time is valid.
--- This is needed for the 'before_bid_insert' trigger's first check to pass.
--- UPDATE auction
--- SET 
---     status = 'Active',
---     start_time = NOW() - INTERVAL 1 DAY, 
---     end_time = NOW() + INTERVAL 2 DAY  
--- WHERE 
---     auctionID = 'A001';
-
--- -- CASE 1.1: 'before_bid_insert' IS CALLED (and FAILS validation)
--- CALL sp_place_bid('C001', 'I001', 40000); -- This will fail (bid too low)
-
--- -- CASE 1.2: 'before_bid_insert' IS CALLED (and PASSES)
--- CALL sp_place_bid('C005', 'I001', 43000); -- This will work
 
 -- PROCEDURE: sp_finalize_auction_item
 -- Purpose: Checks winning bid, updates item status, and STORES THE WINNER.
@@ -368,25 +343,6 @@ BEGIN
 END$$
 DELIMITER ;
 
--- TEST BLOCK FOR: sp_finalize_auction_item
-
--- CASE 7.1: PROCEDURE IS CALLED (Item NOT sold - Reserve not met)
--- UPDATE auction SET status = 'Ended' WHERE auctionID = 'A001';
-
--- CALL sp_finalize_auction_item('I001');
--- -- Verify status is unchanged
--- SELECT status FROM auction_item WHERE itemID = 'I001'; -- Should still be 'Listed'
-
--- -- CASE 7.2: PROCEDURE IS CALLED (Item IS sold - Reserve met)
--- UPDATE auction SET status = 'Active', start_time = NOW() - INTERVAL 1 DAY, end_time = NOW() + INTERVAL 1 DAY WHERE auctionID = 'A004';
--- CALL sp_place_bid('C001', 'I004', 7500); -- Bid 7500 (is >= reserve of 7000)
--- -- Now, end the auction
--- UPDATE auction SET status = 'Ended' WHERE auctionID = 'A004';
--- -- This call will result in "Item I004 sold"
--- CALL sp_finalize_auction_item('I004');
--- -- Verify status is now 'Sold'
--- SELECT status FROM auction_item WHERE itemID = 'I004'; -- Should now be 'Sold'
-
 
 -- FUNCTION: get_current_price
 -- Purpose: Returns the current highest bid for an item, or its start price if no bids exist.
@@ -414,25 +370,8 @@ END$$
 
 DELIMITER ;
 
--- TEST BLOCK FOR: get_current_price
-
--- SELECT 
---     title, 
---     get_current_price(itemID) AS current_price
--- FROM 
---     auction_item
--- WHERE 
---     itemID IN ('I001', 'I004', 'I005');
-    
-    
--- TRIGGER: after_item_payment
--- Purpose: Checks if all items in an auction are paid for after an
---          item's payment is registered (by updating its transactionID).
---          If all items are paid, it updates the parent auction 
---          status to 'Completed'.
 
 DELIMITER $$
-
 CREATE TRIGGER after_item_payment
 AFTER UPDATE ON auction_item
 FOR EACH ROW
@@ -440,28 +379,17 @@ BEGIN
     DECLARE v_total_items INT;
     DECLARE v_paid_items INT;
     DECLARE v_auction_id_to_check VARCHAR(10);
-
-    -- This logic only runs if the transactionID was just added
-    -- (i.e., the item's status changed from unpaid to paid)
     IF NEW.transactionID IS NOT NULL AND OLD.transactionID IS NULL THEN
-    
         SET v_auction_id_to_check = NEW.auctionID;
-
-        -- 1. Count the total number of items in this auction
         SELECT COUNT(*)
         INTO v_total_items
         FROM auction_item
         WHERE auctionID = v_auction_id_to_check;
-
-        -- 2. Count the number of items in this auction that have a payment
         SELECT COUNT(*)
         INTO v_paid_items
         FROM auction_item
         WHERE auctionID = v_auction_id_to_check
         AND transactionID IS NOT NULL;
-
-        -- 3. If all items in the auction are paid for,
-        --    mark the entire auction as 'Completed'.
         IF v_total_items = v_paid_items THEN
             UPDATE auction
             SET status = 'Completed'
@@ -473,101 +401,47 @@ END$$
 
 DELIMITER ;
 
--- TEST BLOCK FOR: after_item_payment
 
--- CASE 2.1: TRIGGER IS CALLED
--- We simulate a payment by setting the transactionID from NULL to 'T001'.
+-- Join queries
+-- Shows item title, category name, and auction name linked through foreign keys
+SELECT ai.itemID, ai.title, c.name AS category, a.auction_name
+FROM auction_item ai
+JOIN category c ON ai.categoryID = c.categoryID
+JOIN auction a ON ai.auctionID = a.auctionID;
 
--- UPDATE auction_item 
--- SET transactionID = 'T004' 
--- WHERE itemID = 'I004';
+-- Helps identify which customer bid on which item and for what amount
+SELECT b.bidID, b.amount, cu.name AS bidder, ai.title AS item
+FROM bid b
+JOIN customer cu ON b.custID = cu.userID
+JOIN auction_item ai ON b.itemID = ai.itemID;
 
--- SELECT status FROM auction WHERE auctionID = 'A004'; -- The status should now be 'Completed'
+-- Nested queries
+-- Checks which items have bidding activity
+SELECT itemID, title
+FROM auction_item
+WHERE itemID IN (SELECT itemID FROM bid);
 
+-- Finds users who registered but did not participate in any bidding
+SELECT name
+FROM customer
+WHERE userID NOT IN (SELECT custID FROM bid WHERE custID IS NOT NULL);
 
--- TEST BLOCK FOR: before_customer_delete
+-- Agregate Queries
+-- Finds maximum bid value for each auctioned item
+SELECT itemID, MAX(amount) AS highest_bid
+FROM bid
+GROUP BY itemID;
 
-
--- CASE 3.1: TRIGGER IS CALLED (and FAILS validation)
--- Customer 'C001' has bids ('BID005', etc.) and payments ('T005').
--- The trigger will count these and block the DELETE.
--- DELETE FROM customer WHERE userID = 'C001'; -- This will fail
-
--- -- CASE 3.2: TRIGGER IS CALLED (and PASSES)
--- -- We create a new customer with no history, then delete them.
--- INSERT INTO customer VALUES
--- ('C999','Test User','1111111111','test@example.com','Test Address','testpass');
--- -- This DELETE fires the trigger. The trigger finds 0 bids and 0 payments
--- -- and allows the DELETE to proceed.
--- DELETE FROM customer WHERE userID = 'C999';
-
--- TEST BLOCK FOR: before_payment_insert
-
--- CASE 4.1: TRIGGER IS CALLED (and FAILS - Duplicate payment)
--- We try to insert a payment with transactionID 'T001', which already exists.
--- The trigger's first check will catch this and raise an error.
--- (We use 'I004' as it's 'Sold', so we pass the *second* check)
--- INSERT INTO payment (transactionID, amount, paymentMethod, PaymentDate, CustomerId, itemID) 
--- VALUES ('T001', 99, 'UPI', NOW(), 'C001', 'I004'); -- This will fail (Duplicate transactionID)
-
--- -- CASE 4.2: TRIGGER IS CALLED (and FAILS - Item not Sold)
--- -- We try to insert a payment for item 'I002', which is still 'Listed'.
--- -- We use a new transactionID 'T998' to pass the *first* check.
--- INSERT INTO payment (transactionID, amount, paymentMethod, PaymentDate, CustomerId, itemID) 
--- VALUES ('T998', 99, 'UPI', NOW(), 'C001', 'I002'); -- This will fail (I002 is 'Listed')
-
--- -- CASE 4.3: TRIGGER IS CALLED (and SUCCEEDS)
--- -- We use item 'I004' which was marked 'Sold' in test 7.2.
--- -- We use a new transactionID 'T999'.
--- -- NOTE: We already added payment 'T004' for item 'I004', but the trigger
--- -- doesn't prevent multiple payments for the same item, only duplicate Transaction IDs.
--- INSERT INTO payment (transactionID, amount, paymentMethod, PaymentDate, CustomerId, itemID) 
--- VALUES ('T1000', 99, 'UPI', CURDATE(), 'C001', 'I004'); -- This will succeed 
-
--- -- Verify insert
--- SELECT * FROM payment WHERE transactionID = 'T1000';
+-- Auctions that received significant bidder engagement
+SELECT a.auctionID, a.auction_name, COUNT(b.bidID) AS bid_count
+FROM auction a
+JOIN auction_item ai ON a.auctionID = ai.auctionID
+JOIN bid b ON ai.itemID = b.itemID
+GROUP BY a.auctionID
+HAVING COUNT(b.bidID) > 2;
 
 
--- -- TEST BLOCK FOR: sp_start_auction
 
--- -- CASE 5.1: PROCEDURE IS CALLED
--- -- SETUP: Auction 'A002' is 'Scheduled' for a future date.
--- -- We update it to be in the past so the procedure will find it.
--- UPDATE auction 
--- SET start_time = NOW() - INTERVAL 1 DAY 
--- WHERE auctionID = 'A002';
--- -- Check status before:
--- SELECT status FROM auction WHERE auctionID = 'A002'; -- Should be 'Scheduled'
--- -- CALL the procedure
--- CALL sp_start_auction();
--- -- Check status after:
--- SELECT status FROM auction WHERE auctionID = 'A002'; -- Should now be 'Active'
-
-
--- -- TEST BLOCK FOR: sp_cancel_auction
-
-
--- -- CASE 6.1: PROCEDURE IS CALLED
--- -- We will cancel Auction 'A003', which contains item 'I005'.
--- -- Check status before:
--- SELECT status FROM auction WHERE auctionID = 'A003'; -- Should be 'Scheduled'
--- SELECT status FROM auction_item WHERE itemID = 'I005'; -- Should be 'Listed'
--- -- CALL the procedure
--- CALL sp_cancel_auction('A003');
--- -- Check status after:
--- SELECT status FROM auction WHERE auctionID = 'A003'; -- Should be 'Cancelled'
--- SELECT status FROM auction_item WHERE itemID = 'I005'; -- Should still be 'Listed'
-
--- -- Test for sp_place_bid
--- UPDATE auction
--- SET 
---     status = 'Active',
---     start_time = NOW() - INTERVAL 1 DAY,
---     end_time = NOW() + INTERVAL 1 DAY
--- WHERE 
---     auctionID = 'A005';
--- CALL sp_place_bid('C001', 'I002', 13000);
--- SELECT * FROM bid WHERE amount = 13000;
 
 -- Drop users first, as they might be connected
 DROP USER IF EXISTS 'auction_admin'@'localhost';
@@ -619,6 +493,7 @@ WHERE auctionID = 'A100';
 
 UPDATE auction
 SET STATUS = 'Ended'
-WHERE auctionID = 'A100';
+WHERE auctionID = 'A101';
 
+SELECT * FROM AUCTION
 
